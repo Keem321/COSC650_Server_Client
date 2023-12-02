@@ -7,10 +7,18 @@ import javax.net.ssl.HttpsURLConnection;
 public class Addowserver {
     // port 11122 per instructions
     private static final int PORT = 11122;
+    private static int ts;
 
     public static void main(String[] args) {
         try (DatagramSocket socket = new DatagramSocket(PORT)) {
             System.out.println("Server is running...");
+
+            // get the ts timeout period
+            BufferedReader reader = new BufferedReader(new InputStreamReader(System.in));
+
+            // Get Web server name from the user
+            System.out.println("Enter timeout period (in seconds):");
+            ts = Integer.parseInt(reader.readLine()) * 1000;
 
             // Thread pool for clients
             ExecutorService executorService = Executors.newCachedThreadPool();
@@ -22,11 +30,10 @@ public class Addowserver {
 
                 // Start a separate handler (thread) for each client
                 DatagramSocket clientSocket = new DatagramSocket();
-                executorService.execute(new ClientHandler(clientSocket, receivePacket));
+                executorService.execute(new ClientHandler(clientSocket, receivePacket, ts));
             }
         } catch (IOException e) {
             e.printStackTrace();
-            // System.err.println("Error while handling client request: " + e.getMessage())
         }
     }
 }
@@ -35,9 +42,10 @@ class ClientHandler implements Runnable {
     private DatagramSocket socket;
     private DatagramPacket receivePacket;
 
-    public ClientHandler(DatagramSocket socket, DatagramPacket receivePacket) {
+    public ClientHandler(DatagramSocket socket, DatagramPacket receivePacket, int timeout) throws SocketException {
         this.socket = socket;
         this.receivePacket = receivePacket;
+        this.socket.setSoTimeout(timeout);
     }
 
     @Override
@@ -70,25 +78,35 @@ class ClientHandler implements Runnable {
         // Continue sending data in 1024 chunks until done
         // - wait for acks
         // - when sending EOT signal, end the loop after that ack is received 
-        boolean running = true;
+        boolean running = true;     
         byte[] fullData = data.getBytes();
         int sequenceNumber = initialsequenceNumber;
+
+        // preparing byte array tools used to concat sequence number to payload
+        ByteArrayOutputStream outputStream = new ByteArrayOutputStream( );
+        DataOutputStream dos = new DataOutputStream(outputStream);
+
         while (running) {
-            // TODO: bundle reply into 1024 size, send one bundle at a time until done
             
             int totalBytes = fullData.length;
             int offset = 0;
 
             while (offset < totalBytes) {
                 int remainingBytes = totalBytes - offset;
+
                 // bundle the web reply into 1024 byte packets (except last remaining)
                 int currentChunkSize = Math.min(1024, remainingBytes);
 
                 byte[] chunk = new byte[currentChunkSize];
                 System.arraycopy(fullData, offset, chunk, 0, currentChunkSize);
 
-                // Send the 1024 sized chunk to client
-                socket.send(new DatagramPacket(chunk, chunk.length, clientAddress, clientPort));
+                // append the sequence number to the message chunk
+                dos.write(Integer.toString(sequenceNumber).getBytes());
+                dos.write(chunk);
+                byte[] sequencedChunk = outputStream.toByteArray( );
+
+                // Send the chunk to client
+                socket.send(new DatagramPacket(sequencedChunk, sequencedChunk.length, clientAddress, clientPort));
                 System.out.println("Sent data with offset: " + offset);
 
                 // STOP and WAIT. Only send the next chunk if the ack goes through
@@ -96,9 +114,10 @@ class ClientHandler implements Runnable {
                     offset += currentChunkSize;
                     sequenceNumber = (sequenceNumber + 1) % 2;
                  }
+                 dos.flush();
             }
             // EOT
-            byte[] EOT = "!EOT!".getBytes();
+            byte[] EOT = (Integer.toString(sequenceNumber) + "!EOT!").getBytes();
             System.out.println("Sent EOT");
             socket.send(new DatagramPacket(EOT, EOT.length, clientAddress, clientPort));
 
@@ -107,25 +126,30 @@ class ClientHandler implements Runnable {
                 running = false;
             }
         }
-
-        // TODO: send a final End of Transmission EOT Signal to let the client know it is safe to disconnect.
+        dos.close();
     }
 
     // TODO: wait according to ts timeout period
-    private boolean ackWait(int sequenceNumber) throws IOException {
+    private boolean ackWait(int sequenceNumber) throws SocketTimeoutException, IOException {
         int ackNumber;
         byte[] ackData = new byte[1024];
         DatagramPacket ackPacket = new DatagramPacket(ackData, ackData.length);
 
-        socket.receive(ackPacket);
+        // try to receive packet, with timeout
+        try {
+            socket.receive(ackPacket);
 
-        // Process the ACK (TODO: according to 3.5, check ack number matches last sequence number delivered)
-        ackNumber = Integer.parseInt(new String(ackPacket.getData(), 0, ackPacket.getLength()));
-        if (ackNumber == sequenceNumber) {
-            System.out.println("Received ACK: " + ackNumber);
-            return true;
+            // Process the ACK
+            ackNumber = Integer.parseInt(new String(ackPacket.getData(), 0, ackPacket.getLength()));
+            if (ackNumber == sequenceNumber) {
+                System.out.println("Received ACK: " + ackNumber);
+                return true;
+            }
+            System.out.println("Received Incorrect ACK: " + ackNumber);
+        
+        } catch (SocketTimeoutException e) {
+            System.out.println("Timeout!");
         }
-        System.out.println("Received Incorrect ACK: " + ackNumber);
         return false;
     }
 

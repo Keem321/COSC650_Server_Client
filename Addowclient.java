@@ -1,4 +1,5 @@
 import java.net.*;
+import java.util.Random;
 import java.io.*;
 
 public class Addowclient {
@@ -41,34 +42,55 @@ public class Addowclient {
         String receivedString;
         DatagramPacket receivedPacket = new DatagramPacket(receivedData, receivedData.length);
         boolean EOT = false;
+        int currentSequenceNumber = -1;
+        int receivedSequenceNumber;
 
         while (!EOT) {
             socket.receive(receivedPacket);
             
             // Process received data
             receivedString = new String(receivedPacket.getData(), 0, receivedPacket.getLength());
-            if (receivedString.equals("!EOT!")) {
+            receivedSequenceNumber = Integer.parseInt(receivedString.substring(0,1));
+            String payload = receivedString.substring(1);
+
+            if (currentSequenceNumber == receivedSequenceNumber) {
+                System.out.println("\nReceived duplicate data from server!\n");
+                // ignore the frame and resend the ack [increment so the prev ack is sent]
+                sequence_number = (sequence_number + 1) % 2;
+
+            } else if (payload.equals("!EOT!")) {
                 EOT = true;
-                // STOP and WAIT
-                ackSend(socket, SERVER_HOST, receivedPacket.getPort());
+                System.out.println("Received EOT from server, ending.");
+
             } else {
-                System.out.println("Received data from server: " + receivedString);
-                // STOP and WAIT
-                ackSend(socket, SERVER_HOST, receivedPacket.getPort());
+                System.out.println("Received data from server: " + payload);
             }
+            
+            // STOP and WAIT
+            ackSend(socket, SERVER_HOST, receivedPacket.getPort());
         }
 
     }
 
     private static void ackSend(DatagramSocket socket, String serverHost, int serverPort) throws IOException {
-        // Simulate sending ACK
+        // Simulate sending ACK, there is a ~10% error chance for testing purposes
         int ackNumber = sequence_number;
         sequence_number = (sequence_number + 1) % 2; // incr sequence num
+
+        // random error sim
+        Random rand = new Random();
+        if(rand.nextInt(100) <= 10) {
+            sequence_number = 3;
+        }
 
         byte[] ackData = Integer.toString(ackNumber).getBytes();
         InetAddress serverAddress = InetAddress.getByName(serverHost);
         DatagramPacket ackPacket = new DatagramPacket(ackData, ackData.length, serverAddress, serverPort);
-        socket.send(ackPacket);
+
+        // random response loss sim (cause timeout)
+        if(rand.nextInt(100) >= 10) {
+            socket.send(ackPacket);
+        }
     }
 
     private static byte[] prepareData(String data) {
