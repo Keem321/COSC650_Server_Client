@@ -2,6 +2,12 @@ import java.net.*;
 import java.util.Random;
 import java.io.*;
 
+
+/* Client
+ * 
+ * 3.1
+ * The client C asks the user to enter a string s with the name of a Web server W in the form: www.name.suf (for example, s=www.towson.edu). It then sends a message to S that has the bytes of the string s as payload.
+ */
 public class Addowclient {
     // port 11122 and localhost per instructions
     private static final String SERVER_HOST = "localhost";

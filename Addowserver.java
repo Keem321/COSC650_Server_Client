@@ -4,16 +4,55 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import javax.net.ssl.HttpsURLConnection;
 
+
+/* Server
+ * 
+ * 1] All messages between the client C and the server S are carried over UDP. 
+ * 
+ * 2] The messages sent by the server S to the client C must have the following three fields:
+ *  2a] Sequence number: int (sequence numbers alternate as 0, 1, 0, 1, …)
+ *  2b] Payload Length: int (size of the payload in bytes)
+ *  2c] Payload: data bytes in packet (maximum size of the payload is 1024 bytes)
+ * 
+ * 3] The server S runs as localhost and uses port 11122.
+ *  3a] S first asks the user to enter a timeout period ts in seconds.
+ * 
+ * 4] When the server S gets the client request, it starts a separate handler (thread) for the client C. 
+ *    The server S does all the client-related processing and communication using the handler. The main 
+ *    thread in the server S only listens for client requests.
+ * 
+ * 5] S sends a GET request to the Web server W over HTTPS using HttpURLConnection.
+ *  5a] S stores all the data received from W in memory.
+ *  
+ * 6] S then sends messages with the data to C.
+ *  6a] Only one message is sent at a time and the server waits for the ACK before sending the next 
+ *      message (as in the STOP and WAIT protocol).
+ *  6b] The payload in each data message from S to C carries 1024 bytes of data from W except for the 
+ *      payload in the last data message that carries the remaining bytes of data from W.
+ *  6c] S then starts the timer for the timeout period ts. It waits for a message from C whose payload is 
+ *      the ACK number 0 or 1 (an int).
+ *  6d] Before the timeout ts, if S gets the ACK, it transmits the next message. Otherwise, it retransmits 
+ *      the message.
+ */
 public class Addowserver {
-    // port 11122 per instructions
     private static final int PORT = 11122;
     private static int ts;
 
+    /* Main
+     * Listens for new client connections and starts threads for them.
+     * Requirements:
+     *  3] The server S runs as localhost and uses port 11122.
+     *   3a] S first asks the user to enter a timeout period ts in seconds.
+     * 
+     *  4] When the server S gets the client request, it starts a separate handler (thread) for the client C. 
+     *     The server S does all the client-related processing and communication using the handler. The main 
+     *     thread in the server S only listens for client requests.
+     */
     public static void main(String[] args) {
         try (DatagramSocket socket = new DatagramSocket(PORT)) {
             System.out.println("Server is running...");
 
-            // get the ts timeout period
+            // Get the ts timeout period
             BufferedReader reader = new BufferedReader(new InputStreamReader(System.in));
 
             // Get Web server name from the user
@@ -23,8 +62,10 @@ public class Addowserver {
             // Thread pool for clients
             ExecutorService executorService = Executors.newCachedThreadPool();
 
+            // Main server thread, only listens for client requests
             while (true) {
                 byte[] receiveData = new byte[1024];
+                // 1] All messages between the client C and the server S are carried over UDP. (DatagramPackets are UDP)
                 DatagramPacket receivePacket = new DatagramPacket(receiveData, receiveData.length);
                 socket.receive(receivePacket);
 
@@ -38,6 +79,11 @@ public class Addowserver {
     }
 }
 
+/* Client Handler
+ * 
+ * 3.3 - webRequest :
+ * S sends a GET request to the Web server W over HTTPS using HttpsURLConnection.
+ */
 class ClientHandler implements Runnable {
     private DatagramSocket socket;
     private DatagramPacket receivePacket;
@@ -74,6 +120,20 @@ class ClientHandler implements Runnable {
         }
     }
 
+    /* Send Data
+     * 2] The messages sent by the server S to the client C must have the following three fields:
+     *  2a] Sequence number: int (sequence numbers alternate as 0, 1, 0, 1, …)
+     *  2b] Payload Length: int (size of the payload in bytes)
+     *  2c] Payload: data bytes in packet (maximum size of the payload is 1024 bytes)
+     * 
+     * 6] S then sends messages with the data to C.
+     *  6a] Only one message is sent at a time and the server waits for the ACK before sending the next 
+     *      message (as in the STOP and WAIT protocol).
+     *  6b] The payload in each data message from S to C carries 1024 bytes of data from W except for the 
+     *      payload in the last data message that carries the remaining bytes of data from W.
+     *  6d] Before the timeout ts, if S gets the ACK, it transmits the next message. Otherwise, it retransmits 
+     *      the message.
+     */
     private void sendData(InetAddress clientAddress, int clientPort, String data, int initialsequenceNumber) throws IOException {
         // Continue sending data in 1024 chunks until done
         // - wait for acks
@@ -129,7 +189,10 @@ class ClientHandler implements Runnable {
         dos.close();
     }
 
-    // TODO: wait according to ts timeout period
+    /* ACK Wait
+     * 6c] S then starts the timer for the timeout period ts. It waits for a message from C whose payload is 
+     *     the ACK number 0 or 1 (an int).
+     */
     private boolean ackWait(int sequenceNumber) throws SocketTimeoutException, IOException {
         int ackNumber;
         byte[] ackData = new byte[1024];
@@ -153,6 +216,10 @@ class ClientHandler implements Runnable {
         return false;
     }
 
+    /* Web Request
+     * 5] S sends a GET request to the Web server W over HTTPS using HttpURLConnection.
+     *  5a] S stores all the data received from W in memory.
+     */
     private String webRequest(String data) throws IOException {
         // Create URL from data and send GET request per instructions
         URL url = new URL("https://" + data);
